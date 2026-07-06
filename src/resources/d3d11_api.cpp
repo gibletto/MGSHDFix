@@ -25,6 +25,7 @@
 #include "mgs3_film_grain.hpp"
 #include "scene_depth.hpp"
 #include "d3d11_state_cache.hpp"
+#include "mgs2_doorjam_probe.hpp"
 void afterPresent();
 
 namespace
@@ -199,6 +200,7 @@ namespace
             {
                 // Drop redundant IA state changes - the games re-set layout/topology per draw.
                 D3D11StateCache::Initialize(g_D3D11Hooks.d3dDevice.Get(), g_D3D11Hooks.d3dDeviceContext.Get());
+                MGS2DoorjamProbe::Initialize(g_D3D11Hooks.d3dDeviceContext.Get());
             }
             afterPresent();
         }

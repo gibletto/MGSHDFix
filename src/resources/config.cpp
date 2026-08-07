@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "fixes/mgs2_railgun_beam.hpp"
 
 #include "common.hpp"
@@ -1105,6 +1105,9 @@ void Config::Read()
     {
         InputHandler::GetKeybind(ini, ConfigKeys::DevMenuHotkey_Section, ConfigKeys::DevMenuHotkey_Setting, Shared_Gamefuncs::DevMenuHotkey);
     }
+
+    ConfigHelper::getValue(ini, ConfigKeys::SoftResetChord_Section, ConfigKeys::SoftResetChord_Setting, Shared_Gamefuncs::SoftResetChordEnabled);
+    LOG_CONFIG(ConfigKeys::SoftResetChord_Section, ConfigKeys::SoftResetChord_Setting, Shared_Gamefuncs::SoftResetChordEnabled);
 
     ConfigHelper::getValue(ini, ConfigKeys::FixIGTLoadingPause_Section, ConfigKeys::FixIGTLoadingPause_Setting, FixPlaytime::bEnabled);
     LOG_CONFIG(ConfigKeys::FixIGTLoadingPause_Section, ConfigKeys::FixIGTLoadingPause_Setting, FixPlaytime::bEnabled);

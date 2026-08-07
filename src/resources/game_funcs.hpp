@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 // One entry of a stage chara table (chara.h CHARA_TABLE)
 struct CHARA
@@ -11,8 +11,10 @@ static_assert(sizeof(CHARA) == 0x10);
 namespace Shared_Gamefuncs
 {
     void HookFuncs();
+    void ServiceSoftReset();
     inline bool StartInDebugMode = false;
     inline int  DevMenuHotkey = 0;
+    inline bool SoftResetChordEnabled = true;
 
 
     using GM_SetArea_t = void(__fastcall*)(int id, const char* dirname);
@@ -20,6 +22,7 @@ namespace Shared_Gamefuncs
 
     using GCL_ChangeSenerioCode_t = void(__fastcall*)(int code);
     inline GCL_ChangeSenerioCode_t GCL_ChangeSenerioCode = nullptr;
+
 
 
 };

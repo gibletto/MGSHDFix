@@ -1,4 +1,4 @@
-// ReSharper disable CppClangTidyReadabilityUseConcisePreprocessorDirectives
+﻿// ReSharper disable CppClangTidyReadabilityUseConcisePreprocessorDirectives
 #include "stdafx.h"
 
 #include "common.hpp"
@@ -10,6 +10,7 @@
 #include "mgs2_linkvarbuf.hpp"
 #include "mgs3_linkvarbuf.hpp"
 #include "input_handler.hpp"
+#include <Xinput.h> //not using xinput itself, just the VK_PAD defs
 /*
 #if defined(RELEASE_BUILD)
 #define RELEASE_CLEARED
@@ -94,6 +95,182 @@ namespace
     // debug helper issues. Set by whichever game hooked, since the linkvars differ.
     void (*EnterDeveloperMenu)() = nullptr;
 
+    constexpr int kSoftResetFrames = 20;
+
+    uint32_t* PadDirectStatus = nullptr;
+    int* GM_PadResetDisable = nullptr;
+    uint32_t SoftResetChord = 0;
+    void (*SoftReset)() = nullptr;
+
+    // The port packs flags above the PS2's 16 bit button word, so the game's own == test never matches.
+    uint32_t PadButtons()
+    {
+        return PadDirectStatus ? (*PadDirectStatus & 0xFFFF) : 0;
+    }
+
+    // Exact match like the PS2, so a seventh button aborts.
+    bool SoftResetChordHeld()
+    {
+        return Shared_Gamefuncs::SoftResetChordEnabled && SoftResetChord != 0 && PadButtons() == SoftResetChord;
+    }
+
+    int SubtitleHideFrames = 0;
+    void (__fastcall* GM_JimakuHide)() = nullptr;
+    void** JimakuWork = nullptr;
+    // The caption daemon is resident, so an interrupted line survives the stage change.
+    void HideCaptions()
+    {
+        if (GM_JimakuHide && JimakuWork && *JimakuWork)
+        {
+            GM_JimakuHide();
+        }
+    }
+
+    uint32_t* PauseLevel = nullptr;
+
+    void TickSoftResetChord()
+    {
+        static int held = 0;
+        static bool fired = false;
+
+        if (!SoftResetChordHeld() || (GM_PadResetDisable && *GM_PadResetDisable != 0))
+        {
+            held = 0;
+            fired = false;
+            return;
+        }
+
+        if (fired || ++held <= kSoftResetFrames)
+        {
+            return;
+        }
+
+        // Stacking a request on a live load pulls a file out from under the loader thread.
+        if (GM_LoadRequest && *GM_LoadRequest != 0)
+        {
+            return;
+        }
+
+        // The shell's own Reset Game is only reachable from the pause menu, so it never runs with the
+        // actor system stopped for a codec. Resetting out of one leaves later loads unable to run.
+        if (PauseLevel && (*PauseLevel & 0x1))
+        {
+            return;
+        }
+
+        fired = true;
+        spdlog::info("Soft reset: returning to title.");
+
+        if (SoftReset)
+        {
+            SoftReset();
+        }
+    }
+
+    // Present keeps ticking through the load, unlike ActGame, whose tail the load path skips.
+    void ServiceSoftResetImpl()
+    {
+        if (SubtitleHideFrames <= 0)
+        {
+            return;
+        }
+
+        --SubtitleHideFrames;
+        HideCaptions();
+    }
+
+    // Changing stage out from under a live movie stream hangs, so follow the two actors that hold one.
+    // titlescr.c destroys its own actor on Start, so its lifetime is exactly the attract screen.
+    void* TitleScreenWork = nullptr;
+    void* MovieStreamWork = nullptr;
+    SafetyHookInline NewTitleScrMan_hook {};
+    SafetyHookInline NewMpegPssMovieStr_hook {};
+    SafetyHookInline GV_DestroyActor_hook {};
+
+    void* __fastcall hooked_NewTitleScrMan(int name, int map)
+    {
+        TitleScreenWork = NewTitleScrMan_hook.call<void*>(name, map);
+        return TitleScreenWork;
+    }
+
+    void* __fastcall hooked_NewMpegPssMovieStr(int name, int map)
+    {
+        MovieStreamWork = NewMpegPssMovieStr_hook.call<void*>(name, map);
+        return MovieStreamWork;
+    }
+
+    void __fastcall hooked_GV_DestroyActor(void* work)
+    {
+        if (work == TitleScreenWork)
+        {
+            TitleScreenWork = nullptr;
+        }
+
+        if (work == MovieStreamWork)
+        {
+            MovieStreamWork = nullptr;
+        }
+
+        GV_DestroyActor_hook.call(work);
+    }
+
+    std::atomic<bool> DevMenuRequested { false };
+
+    // Polled from Present, so it only asks; the game's own frame runs it.
+    void ServiceDevMenuRequest()
+    {
+        if (!DevMenuRequested || !EnterDeveloperMenu)
+        {
+            return;
+        }
+
+        if ((GM_LoadRequest && *GM_LoadRequest != 0) || (GM_PadResetDisable && *GM_PadResetDisable != 0))
+        {
+            return;
+        }
+
+        DevMenuRequested = false;
+
+        const char* stage = g_GameVars.GetCurrentStage();
+        const bool titleStage = stage && std::strcmp(stage, "n_title") == 0;
+
+        // The attract screen and the movie each leave the jump half done: it reaches the menu, then the
+        // next stage load dies on a freed actor.
+        if (TitleScreenWork || MovieStreamWork || (!titleStage && g_GameVars.GetGameMode() == "Menu"))
+        {
+            spdlog::info("Developer menu: ignored on '{:s}'.", stage ? stage : "?");
+            return;
+        }
+
+        EnterDeveloperMenu();
+    }
+
+    // Bluepoint's own chord restarts through the shell menu and ignores GM_PadResetDisable.
+    void DisableShellSoftReset(const char* pattern)
+    {
+        if (uint8_t* bpChord = Memory::PatternScan(baseModule, pattern, "BP_CheckForSoftReset"))
+        {
+            Memory::PatchBytes(reinterpret_cast<uintptr_t>(bpChord), "\xC3", 1);
+            spdlog::info("Soft reset: shell restart chord disabled at {:s}+{:X}", sExeName.c_str(),
+                reinterpret_cast<uintptr_t>(bpChord) - reinterpret_cast<uintptr_t>(baseModule));
+        }
+    }
+
+    // ActGame's tail is reached from every screen, menus included.
+    void HookActGameTail(const char* pattern, const char* name)
+    {
+        if (uint8_t* tail = Memory::PatternScan(baseModule, pattern, name))
+        {
+            static SafetyHookMid ActGameTail_hook {};
+            ActGameTail_hook = safetyhook::create_mid(tail + 6, [](SafetyHookContext&)
+                {
+                    TickSoftResetChord();
+                    ServiceDevMenuRequest();
+                });
+            LOG_HOOK(ActGameTail_hook, name);
+        }
+    }
+
     void RegisterDevMenuHotkey()
     {
         if (!Shared_Gamefuncs::DevMenuHotkey || !EnterDeveloperMenu)
@@ -103,7 +280,7 @@ namespace
 
         g_InputHandler.RegisterHotkey(Shared_Gamefuncs::DevMenuHotkey, "Return to Developer Menu", []()
         {
-            EnterDeveloperMenu();
+            DevMenuRequested = true;
         });
     }
 }
@@ -170,10 +347,27 @@ void MGS2_GameFuncs::HookGameFuncs()
     GV_DestroyActor = reinterpret_cast<GV_DestroyActor_t>(Memory::ResolveCall(GV_DestroyActor_scan));
     spdlog::info("MGS2_GameFuncs: GV_DestroyActor address is {:s}+{:X}", sExeName.c_str(), (uintptr_t)GV_DestroyActor - (uintptr_t)baseModule);
 
+    // n_title's chara table entry for NewTitleScrMan, so we can watch the attract screen come and go.
+    if (uint8_t* titleChara = Memory::PatternScan(baseModule, "A5 14 FC 00 00 00 00 00", "MGS 2: NewTitleScrMan chara entry"))
+    {
+        void* NewTitleScrMan = *reinterpret_cast<void**>(titleChara + 8);
+        NewTitleScrMan_hook = safetyhook::create_inline(NewTitleScrMan, hooked_NewTitleScrMan);
+        GV_DestroyActor_hook = safetyhook::create_inline(reinterpret_cast<void*>(GV_DestroyActor), hooked_GV_DestroyActor);
+        spdlog::info("MGS2_GameFuncs: NewTitleScrMan address is {:s}+{:X}", sExeName.c_str(),
+            reinterpret_cast<uintptr_t>(NewTitleScrMan) - reinterpret_cast<uintptr_t>(baseModule));
+    }
+
+    if (uint8_t* movieChara = Memory::PatternScan(baseModule, "CE BE FF 00 00 00 00 00", "MGS 2: NewMpegPssMovieStr chara entry"))
+    {
+        void* NewMpegPssMovieStr = *reinterpret_cast<void**>(movieChara + 8);
+        NewMpegPssMovieStr_hook = safetyhook::create_inline(NewMpegPssMovieStr, hooked_NewMpegPssMovieStr);
+        spdlog::info("MGS2_GameFuncs: NewMpegPssMovieStr address is {:s}+{:X}", sExeName.c_str(),
+            reinterpret_cast<uintptr_t>(NewMpegPssMovieStr) - reinterpret_cast<uintptr_t>(baseModule));
+    }
 
 
 
-    if (StartInDebugMode)
+
     {
         uint8_t* GM_SetArea_scan = Memory::PatternScan(baseModule, "E8 ?? ?? ?? ?? 48 8B 1D ?? ?? ?? ?? 48 83 C3 1C 48 8B CB E8 ?? ?? ?? ?? 4C 8B C0 4C 2B C3 66 0F 1F 84 00", "GM_SetArea call site");
         GM_SetArea = reinterpret_cast<GM_SetArea_t>(Memory::ResolveCall(GM_SetArea_scan));
@@ -204,17 +398,109 @@ void MGS2_GameFuncs::HookGameFuncs()
             *GM_LoadRequest = 0x0002 | 0x1;
         };
 
-        MAKE_HOOK_MID(baseModule, "E9 ?? ?? ?? ?? C7 43 ?? 01 00 00 00 E9", "GM_StartDaemon() -> Act() | Set developer menu on startup", {
-            static bool startup = true;
-            if (!startup)
+
+        // BP_ResetToTitle does the lot, but leaves the pause set, which the load gate then blocks on.
+        using VoidFn_t = void(__fastcall*)();
+        static VoidFn_t BP_ResetToTitle = nullptr;
+        static VoidFn_t BP_RequestResetToTitle = nullptr;
+        static uint32_t* GV_PauseLevel = nullptr;
+        static int* GM_PauseRequest = nullptr;
+
+        // The Master Collection menu's own reset item: request, then reset. ActGame sees the request
+        // still set on the next paused frame and finishes with the pause-off.
+        if (uint8_t* mcReset = Memory::PatternScan(baseModule, "48 8D 8C 24 D0 00 00 00 E8 ?? ?? ?? ?? 39 B4 24 D0 00 00 00 75 ?? E8 ?? ?? ?? ?? E8 ?? ?? ?? ??", "MGS 2: shell menu reset item"))
+        {
+            BP_RequestResetToTitle = reinterpret_cast<VoidFn_t>(Memory::ResolveCall(mcReset + 0x16));
+            spdlog::info("MGS2_GameFuncs: BP_RequestResetToTitle address is {:s}+{:X}", sExeName.c_str(),
+                reinterpret_cast<uintptr_t>(BP_RequestResetToTitle) - reinterpret_cast<uintptr_t>(baseModule));
+        }
+
+        BP_ResetToTitle = reinterpret_cast<VoidFn_t>(Memory::PatternScan(baseModule, "48 83 EC 28 E8 ?? ?? ?? ?? 48 8B 05 ?? ?? ?? ?? 48 8D 15 ?? ?? ?? ?? 8B 88 BC 00 00 00 E8 ?? ?? ?? ?? 48 8D 0D ?? ?? ?? ?? E8 ?? ?? ?? ?? B9 20 07 18 00", "MGS 2: BP_ResetToTitle"));
+        spdlog::info("MGS2_GameFuncs: BP_ResetToTitle address is {:s}+{:X}", sExeName.c_str(), reinterpret_cast<uintptr_t>(BP_ResetToTitle) - reinterpret_cast<uintptr_t>(baseModule));
+
+        // The subtitle daemon is resident, so interrupting a codec leaves its line on screen.
+        if (uint8_t* jimakuHide = Memory::PatternScan(baseModule, "48 8B 05 ?? ?? ?? ?? C7 05 ?? ?? ?? ?? FF FF FF FF 81 48 50 00 01 00 00 C3", "MGS 2: GM_JimakuHide"))
+        {
+            GM_JimakuHide = reinterpret_cast<void(__fastcall*)()>(jimakuHide);
+            JimakuWork = reinterpret_cast<void**>(Memory::GetRipRelativeAddress(jimakuHide, 3, 7));
+        }
+
+        if (uint8_t* pauseScan = Memory::PatternScan(baseModule, "F6 05 ?? ?? ?? ?? 02 74 26 E8 ?? ?? ?? ?? 85 C0 74 05 E8 ?? ?? ?? ?? E8 ?? ?? ?? ?? 85 C0 74 0F E8 ?? ?? ?? ?? C7 05 ?? ?? ?? ?? 02 00 00 00", "MGS 2: ActGame() paused branch"))
+        {
+            GV_PauseLevel = reinterpret_cast<uint32_t*>(Memory::GetRipRelativeAddress(pauseScan, 2, 7));
+            PauseLevel = GV_PauseLevel;
+            GM_PauseRequest = reinterpret_cast<int*>(Memory::GetRipRelativeAddress(pauseScan + 0x25, 2, 10));
+
+            // Starve the overlay's pad feed on chord frames or pause + L1/R1 opens it under us.
+            static uint8_t* resumeAt = pauseScan + 0x17;
+            static SafetyHookMid MCPadFeed_hook {};
+            MCPadFeed_hook = safetyhook::create_mid(pauseScan + 0x12, [](SafetyHookContext& ctx)
+                {
+                    if (SoftResetChordHeld())
+                    {
+                        ctx.rip = reinterpret_cast<uintptr_t>(resumeAt);
+                    }
+                });
+            LOG_HOOK(MCPadFeed_hook, "MGS 2: pause menu pad feed | Soft reset");
+        }
+
+        if (uint8_t* chordScan = Memory::PatternScan(baseModule, "81 3D ?? ?? ?? ?? 0F 09 00 00 75 19 39 1D", "MGS 2: ActGame() pad reset chord"))
+        {
+            PadDirectStatus = reinterpret_cast<uint32_t*>(Memory::GetRipRelativeAddress(chordScan, 2, 10));
+            GM_PadResetDisable = reinterpret_cast<int*>(Memory::GetRipRelativeAddress(chordScan + 0xC, 2, 6));
+            SoftResetChord = 0x90F;
+            spdlog::info("MGS2_GameFuncs: GV_PadDataDirect status is {:s}+{:X}, GM_PadResetDisable is {:s}+{:X}",
+                sExeName.c_str(), reinterpret_cast<uintptr_t>(PadDirectStatus) - reinterpret_cast<uintptr_t>(baseModule),
+                sExeName.c_str(), reinterpret_cast<uintptr_t>(GM_PadResetDisable) - reinterpret_cast<uintptr_t>(baseModule));
+        }
+
+        SoftReset = []()
+        {
+            if (!BP_ResetToTitle || !GV_PauseLevel || !GM_PauseRequest)
             {
                 return;
             }
-            startup = false;
-            EnterDeveloperMenu();
+
+            // ActGame's reset branch only runs when PAUSE is the only bit set, and it drops the
+            // pause-off otherwise.
+            *GV_PauseLevel = 0x2u;
+
+            if (BP_RequestResetToTitle)
+            {
+                BP_RequestResetToTitle();
+            }
+
+            BP_ResetToTitle();
+            *GM_PauseRequest = 2;
+
+            // The caption daemon outlives the stage, and keeps redrawing until it actually goes.
+            SubtitleHideFrames = 240;
+        };
+
+        if (Shared_Gamefuncs::SoftResetChordEnabled)
+        {
+            DisableShellSoftReset("48 83 EC 38 48 8B 0D ?? ?? ?? ?? 0F 29 74 24 20 E8 ?? ?? ?? ?? F3 0F 10 35 ?? ?? ?? ?? BA 0F 09 00 00 33 C9");
+        }
+        HookActGameTail("FF 81 E4 00 00 00 E8 ?? ?? ?? ?? B8 01 00 00 00 48 83 C4 20 5B C3", "MGS 2: ActGame() tail | Soft reset chord");
+
+
+        MAKE_HOOK_MID(baseModule, "E9 ?? ?? ?? ?? C7 43 ?? 01 00 00 00 E9", "GM_StartDaemon() -> Act() | Developer menu / soft reset", {
+            if (StartInDebugMode)
+            {
+                static bool startup = true;
+                if (startup)
+                {
+                    startup = false;
+                    EnterDeveloperMenu();
+                    return;
+                }
+            }
                       });
 
-        RegisterDevMenuHotkey();
+        if (StartInDebugMode)
+        {
+            RegisterDevMenuHotkey();
+        }
     }
 
 
@@ -282,7 +568,6 @@ void MGS3_Gamefuncs::HookGameFuncs()
     using namespace MGS3Stages;
 
 
-    if (StartInDebugMode)
     {
         uint8_t* GM_SetArea_scan = Memory::PatternScan(baseModule, "E8 ?? ?? ?? ?? 48 8D 0D ?? ?? ?? ?? E8 ?? ?? ?? ?? E8 ?? ?? ?? ?? E8", "GM_SetArea call site");
         GM_SetArea = reinterpret_cast<GM_SetArea_t>(Memory::ResolveCall(GM_SetArea_scan));
@@ -315,26 +600,82 @@ void MGS3_Gamefuncs::HookGameFuncs()
             *GM_LoadRequest = 0x3;
         };
 
-        if (uint8_t* Act_addr = Memory::PatternScan(baseModule, "48 83 EC ?? 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 44 24 ?? 48 89 5C 24", "GM_StartDaemon() -> Act() | Set developer menu on startup"))
+
+        // What the pause menu's own Exit tail-jumps to. It clears GV_PAUSE_STOP but not the menu bits.
+        using VoidFn_t = void(__fastcall*)();
+        using GV_PauseOffActorSystem_t = void(__fastcall*)(uint32_t bits);
+        static VoidFn_t GM_ReturnToTitle = nullptr;
+        static GV_PauseOffActorSystem_t GV_PauseOffActorSystem = nullptr;
+        static int* GM_PauseRequest = nullptr;
+
+        GM_ReturnToTitle = reinterpret_cast<VoidFn_t>(Memory::PatternScan(baseModule, "48 83 EC 28 B9 01 00 00 00 C7 05 ?? ?? ?? ?? 00 00 00 00 E8 ?? ?? ?? ?? 48 8B 05 ?? ?? ?? ?? 48 8D 15 ?? ?? ?? ?? 8B 48 10 E8", "MGS 3: GM_ReturnToTitle"));
+        spdlog::info("MGS3_GameFuncs: GM_ReturnToTitle address is {:s}+{:X}", sExeName.c_str(), reinterpret_cast<uintptr_t>(GM_ReturnToTitle) - reinterpret_cast<uintptr_t>(baseModule));
+
+        if (uint8_t* pauseOff = Memory::PatternScan(baseModule, "F7 D1 21 0D ?? ?? ?? ?? C3 CC CC CC CC CC CC CC 09 0D ?? ?? ?? ?? C3", "MGS 3: GV_PauseOffActorSystem"))
+        {
+            GV_PauseOffActorSystem = reinterpret_cast<GV_PauseOffActorSystem_t>(pauseOff);
+            PauseLevel = reinterpret_cast<uint32_t*>(Memory::GetRipRelativeAddress(pauseOff + 2, 2, 6));
+        }
+
+        if (uint8_t* gateScan = Memory::PatternScan(baseModule, "39 1D ?? ?? ?? ?? 74 4F E8 ?? ?? ?? ?? 40 84 C6 75 45 E8 ?? ?? ?? ?? 85 C0 74 3C B9 0E 00 00 00", "MGS 3: ActGame() load gate"))
+        {
+            GM_PauseRequest = reinterpret_cast<int*>(Memory::GetRipRelativeAddress(gateScan + 0x20, 3, 7));
+        }
+
+        if (uint8_t* chordScan = Memory::PatternScan(baseModule, "81 3D ?? ?? ?? ?? 09 0F 00 00 75 19 39 1D", "MGS 3: ActGame() pad reset chord"))
+        {
+            PadDirectStatus = reinterpret_cast<uint32_t*>(Memory::GetRipRelativeAddress(chordScan, 2, 10));
+            GM_PadResetDisable = reinterpret_cast<int*>(Memory::GetRipRelativeAddress(chordScan + 0xC, 2, 6));
+            SoftResetChord = 0xF09;
+            spdlog::info("MGS3_GameFuncs: GV_PadDataDirect status is {:s}+{:X}, GM_PadResetDisable is {:s}+{:X}",
+                sExeName.c_str(), reinterpret_cast<uintptr_t>(PadDirectStatus) - reinterpret_cast<uintptr_t>(baseModule),
+                sExeName.c_str(), reinterpret_cast<uintptr_t>(GM_PadResetDisable) - reinterpret_cast<uintptr_t>(baseModule));
+        }
+
+        SoftReset = []()
+        {
+            if (!GM_ReturnToTitle || !GV_PauseOffActorSystem || !GM_PauseRequest)
+            {
+                return;
+            }
+
+            GV_PauseOffActorSystem(0xE);
+            *GM_PauseRequest = 0;
+            GM_ReturnToTitle();
+        };
+
+        if (Shared_Gamefuncs::SoftResetChordEnabled)
+        {
+            DisableShellSoftReset("48 83 EC 38 48 8B 0D ?? ?? ?? ?? 0F 29 74 24 20 E8 ?? ?? ?? ?? F3 0F 10 35 ?? ?? ?? ?? BA 09 0F 00 00 33 C9");
+        }
+        HookActGameTail("89 1D ?? ?? ?? ?? E8 ?? ?? ?? ?? E9 ?? ?? ?? ?? E8", "MGS 3: ActGame() tail | Soft reset chord");
+
+        if (uint8_t* Act_addr = Memory::PatternScan(baseModule, "48 83 EC ?? 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 44 24 ?? 48 89 5C 24", "GM_StartDaemon() -> Act() | Developer menu / soft reset"))
         {
             static SafetyHookMid Act_Startup_hook {};
 
+
             Act_Startup_hook = safetyhook::create_mid(Act_addr + 0x406, [](SafetyHookContext& ctx)
                 {
-                    static bool startup = true;
-                    if (!startup)
+                    if (StartInDebugMode)
                     {
-                        return;
+                        static bool startup = true;
+                        if (startup)
+                        {
+                            startup = false;
+                            EnterDeveloperMenu();
+                            return;
+                        }
                     }
-
-                    startup = false;
-                    EnterDeveloperMenu();
                 });
 
-            LOG_HOOK(Act_Startup_hook, "GM_StartDaemon() -> Act()+0x406 | Set developer menu on startup");
+            LOG_HOOK(Act_Startup_hook, "GM_StartDaemon() -> Act()+0x406 | Developer menu / soft reset");
         }
 
-        RegisterDevMenuHotkey();
+        if (StartInDebugMode)
+        {
+            RegisterDevMenuHotkey();
+        }
     }
 
 
@@ -382,3 +723,8 @@ void Shared_Gamefuncs::HookFuncs()
 #if defined (RELEASE_CLEARED)
 #define RELEASE_BUILD
 #endif
+
+void Shared_Gamefuncs::ServiceSoftReset()
+{
+    ServiceSoftResetImpl();
+}

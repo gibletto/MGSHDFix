@@ -865,12 +865,21 @@ namespace ConfigKeys
     constexpr const char* CycleWireframeMode_Help = "";
     constexpr const char* CycleWireframeMode_Tooltip = "Cycle between wireframe rendering modes (available when Rain Width Fix is enabled).";
 
+    constexpr const char* SoftResetChord_Section = "Hotkeys";
+    constexpr const char* SoftResetChord_Setting = "Enable PS2 Reset Chord";
+    constexpr const char* SoftResetChord_Help = "";
+    constexpr const char* SoftResetChord_Tooltip = "Press L1 L2 R1 R2 Select and Start to reset the game to the Title Screen.\n"
+                                                  "\n"
+                                                  "Works from anywhere, but is blocked while the game is saving, as it was on PS2.";
+
     constexpr const char* DevMenuHotkey_Section = "Hotkeys";
     constexpr const char* DevMenuHotkey_Setting = "Return to Developer Menu";
     constexpr const char* DevMenuHotkey_Help = "";
     constexpr const char* DevMenuHotkey_Tooltip = "Returns to the developer menu at any time, from anywhere in the game.\n"
                                                   "\n"
-                                                  "Requires \"Start Game in Developer Menu\" to be enabled.";
+                                                  "Requires \"Start Game in Developer Menu\" to be enabled.\n"
+                                                  "\n"
+                                                  "Note: May freeze if called from some screens";
 
 
     // Achievements

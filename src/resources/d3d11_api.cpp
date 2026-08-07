@@ -1,8 +1,9 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 
 #include "common.hpp"
 #include "d3d11_api.hpp"
 
+#include "game_funcs.hpp"
 #include "gamevars.hpp"
 #include "gpu_check.hpp"
 #include "logging.hpp"
@@ -265,6 +266,7 @@ namespace
 
         //g_EffectSpeedFix.Tick();
         g_InputHandler.Update();
+        Shared_Gamefuncs::ServiceSoftReset();
 
         if (eGameType & MGS3)
         {

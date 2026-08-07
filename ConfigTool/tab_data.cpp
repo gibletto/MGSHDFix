@@ -1,4 +1,4 @@
-// ============================================================================
+﻿// ============================================================================
 // Project:   Universal Config Tool
 // File:      tab_data.cpp
 //
@@ -468,6 +468,9 @@ std::nullopt, false, Field::Int, 100, 1, 100},
 
         { (MGS2|MGS3), ConfigKeys::DevMenuHotkey_Section, ConfigKeys::DevMenuHotkey_Setting, ConfigKeys::DevMenuHotkey_Help, ConfigKeys::DevMenuHotkey_Tooltip,
           std::make_pair(ConfigKeys::Debugging_Start_In_Dev_Menu_Section, ConfigKeys::Debugging_Start_In_Dev_Menu_Setting), false, Field::Hotkey, 0, 0, 0, "F8" },
+
+        { (MGS2|MGS3), ConfigKeys::SoftResetChord_Section, ConfigKeys::SoftResetChord_Setting, ConfigKeys::SoftResetChord_Help, ConfigKeys::SoftResetChord_Tooltip,
+          std::nullopt, false, Field::Bool, true },
 
         { (MGS3), ConfigKeys::OverrideMouseSensitivity_Section, ConfigKeys::OverrideMouseSensitivity_Setting, ConfigKeys::OverrideMouseSensitivity_Help, ConfigKeys::OverrideMouseSensitivity_Tooltip,
           std::nullopt, false, Field::Bool, false },

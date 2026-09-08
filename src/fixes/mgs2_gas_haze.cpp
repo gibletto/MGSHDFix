@@ -10,6 +10,8 @@
 #include "gamevars.hpp"
 #include "mgs2_status_flags.hpp"
 
+#include <set>
+
 using namespace MGS2_StatusFlags;
 
 namespace
@@ -32,17 +34,6 @@ namespace
     // smk_blur Act - fills the prim2 vertices each frame; we read them.
     constexpr const char* kActSig =
         "4C 8B DC 49 89 5B 18 49 89 73 20 55 57 41 54 41 55 41 56 49 8D 6B 98 48 81 EC 40 01 00 00";
-
-    // The Stinger's muzzle warp. smk_blur.c is a copy of this file so the puffs match.
-    constexpr const char* kStgSig =
-        "48 89 5C 24 ?? 48 89 6C 24 ?? 48 89 74 24 ?? 57 41 56 41 57 48 83 EC ?? 8B 7C 24 ?? 41 8B E8 "
-        "41 8B F1 44 8B F2 45 33 C9 4C 8B F9 BA 00 10 00 00";
-    constexpr const char* kStgActSig =
-        "4C 8B DC 55 41 56 49 8D 6B ?? 48 81 EC ?? ?? ?? ?? 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 45 ?? "
-        "83 3D ?? ?? ?? ?? 00 4C 8B F1 0F 85 ?? ?? ?? ?? 49 89 5B 10";
-    constexpr const char* kStgDieSig =
-        "40 53 48 83 EC ?? 48 8B D9 48 8B 49 60 E8 ?? ?? ?? ?? 48 8B 4B 68 48 89 43 60 E8 ?? ?? ?? ?? "
-        "48 89 43 68 48 83 C4 ?? 5B";
 
     constexpr ptrdiff_t kWork_Clock    = 0x1c8;
     constexpr ptrdiff_t kWork_PrimBase = 0x60;
@@ -84,6 +75,7 @@ namespace
     int g_lastClock   = -0x7fffffff;
     bool g_actUpdated = true;
     std::atomic<int> g_activeCount { 0 };
+    std::set<uintptr_t> g_stgWorks;   // works NewSTG_SmokeBlurEffect made; its Die also serves NewSkyColumn and NewPutWorldTexFadeWorld
 
     // Keep clip-space W for near-plane clipping.
     struct GasVertex { float clipX, clipY, clipZ, clipW, u, v; uint32_t color; };
@@ -355,7 +347,12 @@ namespace
     {
         void* work = g_stgHook.fastcall<void*>(world, start_speed, end_speed, start_size, end_size, spot_size,
                                                spot_angle, n_prims, interval, color, flag, life);
-        if (work) g_activeCount.fetch_add(1, std::memory_order_relaxed);
+        if (work)
+        {
+            g_activeCount.fetch_add(1, std::memory_order_relaxed);
+            std::lock_guard<std::mutex> lk(g_vmtx);
+            g_stgWorks.insert(reinterpret_cast<uintptr_t>(work));
+        }
         return work;
     }
 
@@ -379,7 +376,12 @@ namespace
     void __fastcall StgDie_Detour(uintptr_t actor)
     {
         g_stgDieHook.fastcall<void>(actor);
-        ReleaseInstance();
+        bool ours = false;
+        {
+            std::lock_guard<std::mutex> lk(g_vmtx);
+            ours = g_stgWorks.erase(actor) != 0;
+        }
+        if (ours) ReleaseInstance();
     }
 
     bool EnsureD3D(ID3D11Device* dev)
@@ -744,22 +746,36 @@ void MGS2GasHaze::Initialize()
         LOG_HOOK(g_dieHook, "MGS 2: Gas Haze - Die");
     }
 
-    if (uint8_t* stg = Memory::PatternScan(baseModule, kStgSig, "MGS 2: Gas Haze - NewSTG_SmokeBlurEffect"))
+    // The Stinger's muzzle warp. smk_blur.c is a copy of this file so the puffs match.
+    if (uint8_t* stg = Memory::PatternScan(
+            baseModule,
+            "48 89 5C 24 ?? 48 89 6C 24 ?? 48 89 74 24 ?? 57 41 56 41 57 48 83 EC ?? 8B 7C 24 ?? 41 8B E8 "
+            "41 8B F1 44 8B F2 45 33 C9 4C 8B F9 BA 00 10 00 00",
+            "MGS 2: Gas Haze - skoba\\weapon_old\\stg_blur.c -> NewSTG_SmokeBlurEffect()"))
     {
         g_stgHook = safetyhook::create_inline(stg, reinterpret_cast<void*>(NewStgBlur_Detour));
-        LOG_HOOK(g_stgHook, "MGS 2: Gas Haze - NewSTG_SmokeBlurEffect");
+        LOG_HOOK(g_stgHook, "MGS 2: Gas Haze - skoba\\weapon_old\\stg_blur.c -> NewSTG_SmokeBlurEffect()");
     }
 
-    if (uint8_t* stgAct = Memory::PatternScan(baseModule, kStgActSig, "MGS 2: Gas Haze - Stinger Act"))
+    if (uint8_t* stgAct = Memory::PatternScan(
+            baseModule,
+            "4C 8B DC 55 41 56 49 8D 6B ?? 48 81 EC ?? ?? ?? ?? 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 45 ?? "
+            "83 3D ?? ?? ?? ?? 00 4C 8B F1 0F 85 ?? ?? ?? ?? 49 89 5B 10",
+            "MGS 2: Gas Haze - skoba\\weapon_old\\stg_blur.c -> NewSTG_SmokeBlurEffect() -> Act()"))
     {
         g_stgActHook = safetyhook::create_inline(stgAct, reinterpret_cast<void*>(StgAct_Detour));
-        LOG_HOOK(g_stgActHook, "MGS 2: Gas Haze - Stinger Act");
+        LOG_HOOK(g_stgActHook, "MGS 2: Gas Haze - skoba\\weapon_old\\stg_blur.c -> NewSTG_SmokeBlurEffect() -> Act()");
     }
 
-    if (uint8_t* stgDie = Memory::PatternScan(baseModule, kStgDieSig, "MGS 2: Gas Haze - Stinger Die"))
+    if (uint8_t* stgDie = Memory::PatternScan(
+            baseModule,
+            "40 53 48 83 EC ?? 48 8B D9 48 8B 49 60 E8 ?? ?? ?? ?? 48 8B 4B 68 48 89 43 60 E8 ?? ?? ?? ?? "
+            "48 89 43 68 48 83 C4 ?? 5B",
+            "MGS 2: Gas Haze - skoba\\weapon_old\\stg_blur.c -> NewSTG_SmokeBlurEffect() -> Die()"))
     {
+        // Shared with NewSkyColumn() and NewPutWorldTexFadeWorld(); the detour keys on the work pointer.
         g_stgDieHook = safetyhook::create_inline(stgDie, reinterpret_cast<void*>(StgDie_Detour));
-        LOG_HOOK(g_stgDieHook, "MGS 2: Gas Haze - Stinger Die");
+        LOG_HOOK(g_stgDieHook, "MGS 2: Gas Haze - skoba\\weapon_old\\stg_blur.c -> NewSTG_SmokeBlurEffect() -> Die()");
     }
 
     if (uint8_t* primRender = Memory::PatternScan(

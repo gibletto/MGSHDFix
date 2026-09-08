@@ -26,14 +26,13 @@ namespace
     constexpr float       kAlphaCap         = 1.0f;
     constexpr float       kFeedbackGain     = 1.0f;
 
-    // Runs long. Another actor has the same prologue.
     constexpr const char* kDieSig =
         "48 89 5C 24 ?? 57 48 83 EC ?? 48 8B 59 60 48 8B F9 48 85 DB 74 ?? 48 8B CB E8 ?? ?? ?? ?? "
         "48 8B CB E8 ?? ?? ?? ?? 48 8B 5F 68";
 
     // smk_blur Act - fills the prim2 vertices each frame; we read them.
     constexpr const char* kActSig =
-        "4C 8B DC 49 89 5B 18 49 89 73 20 55 57 41 54 41 55 41 56 49 8D 6B 98 48 81 EC 40 01 00 00";
+        "4C 8B DC 49 89 5B ?? 49 89 73 ?? 55 57 41 54 41 55";
 
     constexpr ptrdiff_t kWork_Clock    = 0x1c8;
     constexpr ptrdiff_t kWork_PrimBase = 0x60;
@@ -759,8 +758,7 @@ void MGS2GasHaze::Initialize()
 
     if (uint8_t* stgAct = Memory::PatternScan(
             baseModule,
-            "4C 8B DC 55 41 56 49 8D 6B ?? 48 81 EC ?? ?? ?? ?? 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 45 ?? "
-            "83 3D ?? ?? ?? ?? 00 4C 8B F1 0F 85 ?? ?? ?? ?? 49 89 5B 10",
+            "4C 8B DC 55 41 56 49 8D 6B ?? 48 81 EC E8 00 00 00",
             "MGS 2: Gas Haze - skoba\\weapon_old\\stg_blur.c -> NewSTG_SmokeBlurEffect() -> Act()"))
     {
         g_stgActHook = safetyhook::create_inline(stgAct, reinterpret_cast<void*>(StgAct_Detour));

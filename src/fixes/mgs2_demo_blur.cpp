@@ -22,9 +22,7 @@ namespace
     constexpr ptrdiff_t kDmapackAutopacket = 0x38;
     constexpr uint8_t kOpEnd = 0x1e;
 
-    // blur_timer.c Act(), the Stinger's screen yank. Its fields sit 8 bytes below blur.c's.
-    constexpr const char* kTimerActSig =
-        "40 53 48 83 EC ?? 83 3D ?? ?? ?? ?? 00 48 8B D9 74 ?? 48 83 C4 ?? 5B";
+    // blur_timer.c, the Stinger's screen yank. Its fields sit 8 bytes below blur.c's.
     constexpr ptrdiff_t kTimerDmapack = 0x58;
     constexpr ptrdiff_t kTimerIntense = 0x70;
 
@@ -433,10 +431,13 @@ void MGS2DemoBlur::Initialize()
         spdlog::error("MGS 2: Demo Blur: Act pattern scan failed.");
     }
 
-    if (uint8_t* timer = Memory::PatternScan(baseModule, kTimerActSig, "MGS 2: Demo Blur -> blur_timer.c Act()"))
+    if (uint8_t* timer = Memory::PatternScan(
+            baseModule,
+            "40 53 48 83 EC ?? 83 3D ?? ?? ?? ?? 00 48 8B D9 74 ?? 48 83 C4 ?? 5B",
+            "MGS 2: Demo Blur - okajima\\effect\\blur_timer.c -> NewBlurProgTimer() -> Act()"))
     {
         g_timerActHook = safetyhook::create_inline(timer, reinterpret_cast<void*>(TimerAct_Detour));
-        LOG_HOOK(g_timerActHook, "MGS 2: Demo Blur - Stinger Yank Act");
+        LOG_HOOK(g_timerActHook, "MGS 2: Demo Blur - okajima\\effect\\blur_timer.c -> NewBlurProgTimer() -> Act()");
     }
 
     if (g_actHook || g_timerActHook)

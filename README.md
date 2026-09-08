@@ -37,6 +37,7 @@ This is a fix that adds custom resolutions, ultrawide support and much more to t
 - Experimental 16:9 HUD option that resizes HUD/movies (MGS2/MGS3).
 - Borderless/windowed mode.
 - DualShock 2 / 3 support (pressure-sensitive / analog controller face buttons)
+- Option to swap X/O (OK / CANCEL inputs) in Menus.
 - Mouse cursor toggle.
 - Launcher skips (see Config Tool to configure).
 - Option to disable pausing on alt-tab.
@@ -69,7 +70,6 @@ This is a fix that adds custom resolutions, ultrawide support and much more to t
 - Option to force Snake / Raiden to wear their sunglasses (and outright disable their sunglasses.)
 - Option to force Real Time Clock based hostage Easter Egg.
 - Option to restore grenade cooking (having detonation timer start while the grenade is still held.)
-- Option to swap X/O (OK / CANCEL inputs) in Menus.
 - Option to swap thermal goggle color palettes in realtime (Substance/vanilla, red hot / Sons of Liberty, Splinter Cell Blacklist, black hot, white hot), using Numpad 7 while thermals are equipped. [Examples](https://imgur.com/a/ThRpIbj)
 - Option to enable cut Metal Gear 2: Solid Snake Colonel sprites during some late-game Codec calls. [PR #234](https://github.com/ShizCalev/MGSHDFix/pull/234)
 - Option to restore original 2001 Sons of Liberty radar rotation. [Example](https://imgur.com/a/QNDTgrO)
@@ -281,6 +281,19 @@ For more immediate problems, you can contact us in the [#HDFix](https://discord.
 
 <br />
 
+
+## Nightly Builds
+
+> [!NOTE]
+> Experimental alpha builds containing the latest features and fixes are available on the [nightly release page](https://github.com/ShizCalev/MGSPatriotFix/releases/tag/nightly).
+>
+> These builds may be unstable or crash unexpectedly. They are intended for users who want to test upcoming changes before an official release.
+>
+> For the most stable experience, download the [latest official release](https://github.com/ShizCalev/MGSPatriotFix/releases/latest) instead.
+
+<br />
+
+
 ## Known Issues
 This list will contain bugs which may or may not be fixed.
 
@@ -346,7 +359,6 @@ Additional screenshots & uncompressed 4K versions can be found at our Media repo
 - MGS2 - Make the in-game Radar, Cutscene Letterboxing, and Previous Missions reading progress persistent across game sessions. (2001 SoL)
 - MGS3 - Fix Knife Not Appearing in Chest Sheath After Torture (2004 Snake Eater)
 - MGS3 - Correct More Sped Up Effects (2011 HDC)
-- MGS3 - Swap X/O Buttons on Controller in Menus (2011 HDC)
 
 <br />
 

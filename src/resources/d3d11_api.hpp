@@ -7,8 +7,9 @@ class D3D11Hooks final
 public:
     static void Initialize();
 
-    // Stock Prim.fx vertex shaders, caught as the game creates them.
-    enum class StockVS { None, Sprite, SpriteFog, Poly, PolyFog };
+    // Stock vertex shaders, caught as the game creates them: the Prim.fx set and the lit KMS/EVM
+    // families (skinned in three uv-set variants, rigid, rigid with short normals, morph).
+    enum class StockVS { None, Sprite, SpriteFog, Poly, PolyFog, KmsLitUv0, KmsLitUv1, KmsLitUv2, KmsLitRigid, KmsLitRigidShortNrm, KmsLitMorph };
     static StockVS GetStockVS(ID3D11VertexShader* vs);
 
     HWND MainHwnd = nullptr;
